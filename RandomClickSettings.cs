@@ -18,4 +18,10 @@ public class RandomClickSettings : ISettings
 
     [Menu("Action Delay")]
     public RangeNode<int> ActionDelay { get; set; } = new RangeNode<int>(50, 0, 1000);
+
+    [Menu("Off if full inventory")]
+    public ToggleNode InventoryOff { get; set; } = new ToggleNode(false);
+
+    [Menu("Off Count")]
+    public RangeNode<int> OffCount { get; set; } = new RangeNode<int>(50, 0, 60);
 }

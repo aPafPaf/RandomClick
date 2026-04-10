@@ -9,111 +9,153 @@ namespace RandomClick;
 public class RandomClick : BaseSettingsPlugin<RandomClickSettings>
 {
     private RectangleF _beastRectangle;
-    private List<RectangleF> _beastRectangles = new();
+    private readonly List<RectangleF> _beastRectangles = new();
     private DateTime _lastClickTime = DateTime.MinValue;
-    private Random _random = new();
-    private bool _isHoldingCtrl = false;
-    private bool _isRunning = false;
+    private readonly Random _random = new();
+    private bool _isHoldingCtrl;
+    private bool _isRunning;
+
+    private const float LeftTrimPercent = 0.1f;
+    private const float RightTrimPercent = 0.2f;
+    private const int GridColumns = 3;
+    private const int GridRows = 5;
+    private const int ClickRow = 1;
 
     public override Job Tick()
     {
-        var windowRect = GameController.Window.GetWindowRectangleTimeCache;
+        HandleHotkey();
 
-        // Переключение состояния цикла по горячей клавише
-        if (Settings.OnOff.PressedOnce())
-        {
-            _isRunning = !_isRunning;
-
-            // Если остановили - отпускаем Ctrl
-            if (!_isRunning && _isHoldingCtrl)
-            {
-                Input.KeyUp(Keys.LControlKey);
-                _isHoldingCtrl = false;
-            }
-        }
-
-        // Если цикл не запущен - ничего не делаем
         if (!_isRunning)
             return null;
 
-        // Проверяем видимость панели
-        if (!GameController.IngameState.IngameUi.ChallengesPanel.IsVisible)
+        if (!IsPanelVisible() || IsInventoryFull())
         {
-            // Панель не видима - останавливаем цикл и отпускаем Ctrl
-            _isRunning = false;
-            if (_isHoldingCtrl)
-            {
-                Input.KeyUp(Keys.LControlKey);
-                _isHoldingCtrl = false;
-            }
+            StopRunning();
             return null;
         }
 
-        var rectangleTabContainer = GameController.IngameState.IngameUi.ChallengesPanel.TabContainer.GetClientRectCache;
-
-        if (rectangleTabContainer.IsEmpty)
-            return null;
-
-        // Убрать 10% слева и 20% справа
-        float leftOffset = rectangleTabContainer.Width * 0.1f;
-        float rightOffset = rectangleTabContainer.Width * 0.2f;
-
-        _beastRectangle = new RectangleF(
-            rectangleTabContainer.X + leftOffset,
-            rectangleTabContainer.Y,
-            rectangleTabContainer.Width - leftOffset - rightOffset,
-            rectangleTabContainer.Height
-        );
-
-        // Разделить на 3 вертикальных (колонки) и 5 горизонтальных (ряды) = 15 ячеек
-        _beastRectangles.Clear();
-        float cellWidth = _beastRectangle.Width / 3;
-        float cellHeight = _beastRectangle.Height / 5;
-
-        for (int row = 1; row < 2; row++)
-        {
-            for (int col = 0; col < 3; col++)
-            {
-                var cell = new RectangleF(
-                    _beastRectangle.X + col * cellWidth,
-                    _beastRectangle.Y + row * cellHeight,
-                    cellWidth,
-                    cellHeight
-                );
-                _beastRectangles.Add(cell);
-            }
-        }
-
-        // Зажать LCtrl пока цикл работает и панель видима
-        if (!_isHoldingCtrl)
-        {
-            Input.KeyDown(Keys.LControlKey);
-            _isHoldingCtrl = true;
-        }
-
-        // Автоматический клик по случайной ячейке
-        if ((DateTime.Now - _lastClickTime).TotalMilliseconds > Settings.ActionDelay.Value)
-        {
-            _lastClickTime = DateTime.Now;
-            ClickRandomCell(windowRect);
-        }
+        UpdateGrid();
+        EnsureCtrlHeld();
+        TryClick();
 
         return null;
     }
 
-    private void ClickRandomCell(RectangleF windowRect)
+    private void HandleHotkey()
+    {
+        if (!Settings.OnOff.PressedOnce())
+            return;
+
+        if (_isRunning)
+            StopRunning();
+        else
+            _isRunning = true;
+    }
+
+    private bool IsPanelVisible() =>
+        GameController.IngameState.IngameUi.ChallengesPanel.IsVisible;
+
+    private bool IsInventoryFull()
+    {
+        if (!Settings.InventoryOff.Value)
+            return false;
+
+        return CountItemsInventory() >= Settings.OffCount.Value;
+    }
+
+    private void StopRunning()
+    {
+        _isRunning = false;
+        ReleaseCtrl();
+    }
+
+    private void EnsureCtrlHeld()
+    {
+        if (_isHoldingCtrl)
+            return;
+
+        Input.KeyDown(Keys.LControlKey);
+        _isHoldingCtrl = true;
+    }
+
+    private void ReleaseCtrl()
+    {
+        if (!_isHoldingCtrl)
+            return;
+
+        Input.KeyUp(Keys.LControlKey);
+        _isHoldingCtrl = false;
+    }
+
+    private void UpdateGrid()
+    {
+        var tabRect = GameController.IngameState.IngameUi.ChallengesPanel
+            .TabContainer.GetClientRectCache;
+
+        if (tabRect.IsEmpty)
+            return;
+
+        float leftOffset = tabRect.Width * LeftTrimPercent;
+        float rightOffset = tabRect.Width * RightTrimPercent;
+
+        _beastRectangle = new RectangleF(
+            tabRect.X + leftOffset,
+            tabRect.Y,
+            tabRect.Width - leftOffset - rightOffset,
+            tabRect.Height
+        );
+
+        BuildCells();
+    }
+
+    private void BuildCells()
+    {
+        _beastRectangles.Clear();
+
+        float cellWidth = _beastRectangle.Width / GridColumns;
+        float cellHeight = _beastRectangle.Height / GridRows;
+
+        for (int col = 0; col < GridColumns; col++)
+        {
+            _beastRectangles.Add(new RectangleF(
+                _beastRectangle.X + col * cellWidth,
+                _beastRectangle.Y + ClickRow * cellHeight,
+                cellWidth,
+                cellHeight
+            ));
+        }
+    }
+
+    private void TryClick()
+    {
+        if ((DateTime.Now - _lastClickTime).TotalMilliseconds <= Settings.ActionDelay.Value)
+            return;
+
+        _lastClickTime = DateTime.Now;
+        ClickRandomCell();
+    }
+
+    private void ClickRandomCell()
     {
         if (_beastRectangles.Count == 0)
             return;
 
-        var randomCell = _beastRectangles[_random.Next(_beastRectangles.Count)];
+        var windowRect = GameController.Window.GetWindowRectangleTimeCache;
+        var cell = _beastRectangles[_random.Next(_beastRectangles.Count)];
+
         var center = new System.Numerics.Vector2(
-            windowRect.X + randomCell.X + randomCell.Width / 2,
-            windowRect.Y + randomCell.Y + randomCell.Height / 2
+            windowRect.X + cell.X + cell.Width / 2,
+            windowRect.Y + cell.Y + cell.Height / 2
         );
 
         Input.SetCursorPos(center);
         Input.Click(MouseButtons.Left);
+    }
+
+    public int CountItemsInventory()
+    {
+        var inventory = GameController.IngameState.ServerData.PlayerInventories[0].Inventory;
+        return inventory?.Items.Count ?? 0;
     }
 
     public override void Render()
@@ -121,12 +163,10 @@ public class RandomClick : BaseSettingsPlugin<RandomClickSettings>
         if (_beastRectangle.IsEmpty)
             return;
 
-        Graphics.DrawFrame(_beastRectangle, SharpDX.Color.Gray, 2);
+        Graphics.DrawFrame(_beastRectangle, Color.Gray, 2);
 
-        foreach (var rectangle in _beastRectangles)
-        {
-            Graphics.DrawFrame(rectangle, SharpDX.Color.HotPink, 2);
-        }
+        foreach (var rect in _beastRectangles)
+            Graphics.DrawFrame(rect, Color.HotPink, 2);
 
         base.Render();
     }
